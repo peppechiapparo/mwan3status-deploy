@@ -1,0 +1,1197 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/png" href="static/favicon.png">
+<title>Starlink Data Usage</title>
+<style>
+  :root{ --ok:#1f8b4c; --bad:#cc1f1a; --bg:#0b1220; --fg:#e6eef7; --muted:#9fb3c8; --card:#121a2b; --ring:#2a3650; --grid:#22314e }
+  body{margin:0;background:var(--bg);color:var(--fg);font:16px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu}
+  .topbar{background:#0f1627;border-bottom:1px solid #1b2436}
+  .topbar .wrap{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;padding:10px 18px}
+  .logo{height:36px;width:auto;display:block}
+  .brand-title{margin:0;line-height:36px;color:var(--brand, #e6eef7)}
+  .wrap{max-width:1300px;margin:0 auto;padding:18px}
+  .pill{display:inline-block;background:var(--ring);border-radius:999px;padding:.35rem .7rem;font-weight:600}
+  .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  h1{margin:.1rem 0 .6rem 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:12px}
+  .card{background:var(--card);border:1px solid #1b2436;border-radius:12px;padding:12px}
+  /* Offline cards: compact view, centered header only */
+  .card.offline{min-height:96px;display:flex;align-items:center;justify-content:center}
+  .card.offline .row{justify-content:center;gap:10px;width:100%}
+  .card.offline [id^="info_"]{display:none}
+  .card.offline .rate{display:none}
+  .card.offline canvas{display:none}
+  .flow-card{background:var(--card);border:1px solid #1b2436;border-radius:12px;padding:12px;margin-top:12px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;color:var(--muted);font-size:.9rem}
+  .legend-item{display:flex;align-items:center;gap:6px}
+  .swatch{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .row{display:flex;justify-content:space-between;align-items:center}
+  .dot{width:15px;height:15px;border-radius:50%;display:inline-block;margin-right:6px}
+  .ok{background:var(--ok)} .bad{background:var(--bad)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .sub{color:var(--muted);font-size:.9rem}
+  .rate{margin:6px 0 4px 0}
+  /* Default canvases (small sparkline, flow etc.) */
+  canvas:not(.gauge){width:100%;height:160px;display:block}
+  .gauge-svg{width:100%;height:auto;display:block}
+  /* Gauges use a width-driven size; aspect-ratio keeps shape in modern browsers */
+  canvas.gauge{height:auto; aspect-ratio: 2 / 1}
+  pre.pol{white-space:pre;background:var(--card);border:1px solid #1b2436;border-radius:8px;padding:10px;overflow:auto}
+  .table-card{background:var(--card);border:1px solid #1b2436;border-radius:12px;padding:10px;overflow:auto}
+  table.tbl{width:100%;border-collapse:collapse}
+  .tbl th,.tbl td{padding:8px 10px;border-bottom:1px solid #1b2436}
+  .tbl th{color:#9fb3c8;font-weight:600;text-align:left}
+  .tbl td.num{ text-align:center }
+  .tbl th.num{ text-align:center }
+  /* Usage gauges typography tweaks */
+  #usageCard .row b{font-size:16px;font-weight:600}
+  #usageCard .row .sub{font-size:12px}
+  /* --- BEGIN: Scoped gauge sizing (only for Data Usage section) --- */
+  /* Keep generic canvases and other sections untouched. */
+  /* Target only the usage grid and gauge elements to make them smaller and fit 4 per row. */
+  #usageCard { padding: 10px; }
+  #usageGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  @media (min-width: 1100px) {
+    /* Force 4 columns on wide screens */
+    #usageGrid { grid-template-columns: repeat(4, 1fr); }
+  }
+  /* Make SVG gauges visually smaller inside each card without changing global canvas rules */
+  #usageGrid .card { padding: 10px; min-height: 170px; }
+  #usageGrid .card .gauge-svg { width: 72%; max-width: 240px; margin: 0.6rem auto 0.4rem; display:block; height:auto; }
+  /* Scale internal SVG text to match page typography */
+  #usageGrid .gauge-svg text, #usageGrid .gauge-svg tspan { font-size: 12px; }
+  /* If any gauges are drawn on canvas, target only canvas.gauge to reduce their footprint */
+  canvas.gauge { width: 72% !important; max-width: 240px; margin: 0.6rem auto 0.4rem; height: auto !important; aspect-ratio: 2 / 1; display:block; }
+  /* Do not change the small text under the gauge (used/remaining and legend) */
+  #usageGrid .row .sub, #usageCard .legend { font-size: 0.9rem; }
+  /* --- END: Scoped gauge sizing --- */
+  /* Make the small used/remaining text in each gauge card match the subnet label size (slightly smaller than previous) */
+  #usageGrid .card .sub.mono{ font-size:16px; }
+  /* The Remaining label shown under the SVG gauge should match the subnet font (centered) */
+  #usageGrid .card .gRemaining{ text-align:center; color:#cfd6e6; font:600 16px system-ui, sans-serif; margin-top:8px }
+  #usageGrid .card .gRemaining{ margin-bottom:10px }
+  /* Short red notice for reset behaviour (very concise and child-friendly) */
+  .notice-reset{background:transparent;color:#ff6b6b;border-left:4px solid #ff3b3b;padding:8px 10px;margin:8px 0;border-radius:6px;font-weight:600}
+  /* Fleetone Download button: large rounded pill with white circular icon on the right */
+  #fleetoneCard .download-btn{
+    display:inline-flex;align-items:center;gap:.7rem;background:linear-gradient(180deg,#2e8bff 0%,#1e63d6 100%);color:#fff;border:0;padding:.2rem 1.1rem;border-radius:999px;font-weight:800;cursor:pointer;box-shadow:0 3px 0 rgba(0,0,0,0.18), inset 0 -3px 0 rgba(255,255,255,0.06);text-transform:uppercase;letter-spacing:.8px}
+  #fleetoneCard .download-btn:active{transform:translateY(1px);box-shadow:0 2px 0 rgba(0,0,0,0.15)}
+  #fleetoneCard .download-btn .df-label{display:inline-block;padding-left:.2rem}
+  #fleetoneCard .download-btn .df-icon{width:32px;height:32px;border-radius:50%;background:#fff;display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;box-shadow:0 2px 0 rgba(0,0,0,0.12)}
+  #fleetoneCard .download-btn .df-icon svg{width:14px;height:14px;fill:#1e63d6}
+</style>
+
+<div class="topbar">
+  <div class="wrap">
+  <img src="/static/Telespazio.png" alt="Telespazio" class="logo">
+  <h1 class="brand-title">__HOSTNAME__</h1>
+    <span class="pill" id="ts" style="justify-self:end">—</span>
+  </div>
+  
+</div>
+
+<div class="wrap">
+  <div class="header">
+    <div>
+      <span class="pill">ACTIVE INTERFACE: <span id="active">__ACTIVE__IFACE__</span></span>
+    </div>
+  </div>
+
+  <!-- Fleetone export card: month picker + CSV download (moved to top) -->
+  <div class="card" id="fleetoneCard" style="margin-top:12px">
+    <h3 style="margin-top:0">Fleetone</h3>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label for="fleetoneMonthSelect" style="font-size:0.95rem;color:var(--muted)">Select month</label>
+      <select id="fleetoneMonthSelect" style="min-width:160px;padding:6px;border-radius:6px;background:var(--card);color:var(--fg);border:1px solid #1b2436"></select>
+      <button id="fleetoneDownloadBtn" class="download-btn" title="Download CSV">
+        <span class="df-label">Download</span>
+        <span class="df-icon" aria-hidden="true">
+          <!-- downward arrow -->
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><path d="M12 3v13.17l4.59-4.58L18 13l-6 6-6-6 .41-.41L11 16.17V3z"/></svg>
+        </span>
+      </button>
+      <span id="fleetoneStatus" class="sub" style="margin-left:12px"></span>
+    </div>
+    <div class="sub" style="margin-top:6px;color:var(--muted)">
+      Select a month, then click the Download button to export the call log as a CSV file.
+    </div>
+  </div>
+
+  <div class="flow-card" id="interfacesCard">
+    <h3 style="margin-top:0">Interfaces</h3>
+    <div id="cards" class="grid"></div>
+  </div>
+
+  <div class="flow-card" id="usageCard">
+  <h3 style="margin-top:0;display:flex;align-items:center;justify-content:space-between">
+  <span>Monthly Data Usage (<span id="usageMonth">current month</span>)</span>
+    <span id="usageTotalWrap" style="color:#9fb3c8">Total: <small id="usageTotal" style="margin-left:6px;color:#9fb3c8">—</small></span>
+  </h3>
+    <div id="usageGrid" class="grid"></div>
+    <div class="legend" style="margin-top:8px"><div class="legend-item"><span class="swatch" style="background:#e03131"></span><span>Consumato</span></div><div class="legend-item"><span class="swatch" style="background:#2fb344"></span><span>Rimanente</span></div></div>
+  </div>
+
+  <!-- Connected Users: new section, refreshed every 30s -->
+
+  <div class="flow-card" id="connectedCard">
+    <h3 style="margin-top:0">Connected Users</h3>
+    <div class="table-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:12px;flex-wrap:wrap">
+        <input id="connectedSearch" placeholder="Search by name or MB..." style="min-width:220px;padding:6px;border-radius:6px;background:var(--card);color:var(--fg);border:1px solid #1b2436">
+        <div style="display:flex;gap:6px;align-items:center">
+          <button id="connectedFirst" title="First" style="background:transparent;border:1px solid #1b2436;border-radius:6px;padding:6px;color:var(--fg)">⏮</button>
+          <button id="connectedPrev" title="Previous" style="background:transparent;border:1px solid #1b2436;border-radius:6px;padding:6px;color:var(--fg)">◀</button>
+          <span id="connectedPage" style="min-width:80px;text-align:center;color:var(--muted)">1/1</span>
+          <button id="connectedNext" title="Next" style="background:transparent;border:1px solid #1b2436;border-radius:6px;padding:6px;color:var(--fg)">▶</button>
+          <button id="connectedLast" title="Last" style="background:transparent;border:1px solid #1b2436;border-radius:6px;padding:6px;color:var(--fg)">⏭</button>
+        </div>
+      </div>
+      <table class="tbl mono" id="connectedTable">
+        <thead id="connectedHead"></thead>
+        <tbody id="connectedBody"><tr><td colspan="6">—</td></tr></tbody>
+      </table>
+      <div id="connectedInfo" class="sub" style="margin-top:8px;color:var(--muted)">Aggiornamento ogni 30s</div>
+    </div>
+  </div>
+
+  <!-- Fleetone moved to top; duplicate removed -->
+
+  <div class="notice-reset" id="noticeReset" role="note">The data shown below starts from the last time the TBOX was powered on. If the TBOX is restarted, these counters reset to zero. Monthly totals are saved and do not reset when the device restarts.</div>
+
+  <div class="flow-card" id="flowsCard">
+    <h3 style="margin-top:0">IPv4 Flows (sources → WAN)</h3>
+    <canvas id="flowCanvas" style="width:100%;height:280px;display:block"></canvas>
+    <div id="flowLegend" class="legend"></div>
+  </div>
+
+  <div class="flow-card" id="rulesCard">
+    <h3 style="margin-top:0">Active ipv4 user rules</h3>
+    <div class="table-card">
+      <table class="tbl mono" id="rulesTable">
+        <thead>
+          <tr><th>Source address/subnet</th><th class="num">Bytes (UPLOAD+DOWNLOAD)</th><th>WAN</th></tr>
+        </thead>
+        <tbody id="rulesBody">
+          <tr><td colspan="3">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// Config loader: fetch UI visibility config from static file and apply
+let UI_CONFIG = { hide:{ fleetone:false, connected_users:false, interfaces:false, usage:false, flows:false, rules:false }, auto:{ fleetone_if_missing:true, connected_if_empty:true } };
+async function loadUiConfig(){
+  try{
+  // Read static config generated during deploy
+  const r = await fetch('/ui_config.json',{cache:'no-store'});
+  if(r.ok){ const j = await r.json(); if(j && typeof j==='object'){ UI_CONFIG = Object.assign(UI_CONFIG, j); } }
+  }catch(e){ /* keep defaults */ }
+}
+function applyVisibility(){
+  try{
+    const h = (UI_CONFIG && UI_CONFIG.hide) || {}; const a=(UI_CONFIG && UI_CONFIG.auto)||{};
+    const byId = id=>document.getElementById(id);
+    const setVis = (id, show)=>{ const el=byId(id); if(!el) return; el.style.display = show? '': 'none'; };
+    // Base from manual config
+    setVis('fleetoneCard', !h.fleetone);
+    setVis('connectedCard', !h.connected_users);
+    setVis('interfacesCard', !h.interfaces);
+    setVis('usageCard', !h.usage);
+    setVis('flowsCard', !h.flows); // hide whole Flows section (card + title + legend)
+    setVis('rulesCard', !h.rules);
+    // Hide the reset notice if both Flows and Rules sections are hidden
+    try{
+      const flowsHidden = (byId('flowsCard')?.style.display === 'none');
+      const rulesHidden = (byId('rulesCard')?.style.display === 'none');
+      setVis('noticeReset', !(flowsHidden && rulesHidden));
+    }catch(_){ /* ignore */ }
+  }catch(e){}
+}
+loadUiConfig().then(applyVisibility);
+
+// Calcola un colore medio dal logo per la scritta
+function setBrandColorFromLogo(){
+  try{
+    const img=new Image();
+  img.src='/static/Telespazio.png';
+    img.onload=()=>{
+      try{
+        const c=document.createElement('canvas');
+        const w=Math.min(64, img.naturalWidth||64), h=Math.min(64, img.naturalHeight||64);
+        c.width=w; c.height=h; const ctx=c.getContext('2d');
+        ctx.drawImage(img,0,0,w,h);
+        const data=ctx.getImageData(0,0,w,h).data;
+        let r=0,g=0,b=0,n=0;
+        for(let i=0;i<data.length;i+=4){
+          const a=data[i+3]; if(a<16) continue; // ignora quasi trasparente
+          r+=data[i]; g+=data[i+1]; b+=data[i+2]; n++;
+        }
+        if(n>0){ r=Math.round(r/n); g=Math.round(g/n); b=Math.round(b/n);
+          document.documentElement.style.setProperty('--brand', `rgb(${r}, ${g}, ${b})`);
+        }
+      }catch(e){}
+    };
+  }catch(e){}
+}
+setBrandColorFromLogo();
+
+// Elenco subnet dinamico dal server (fallback sicuro se non sostituito)
+let SRC_NETS = [];
+try { SRC_NETS = JSON.parse('__SRC_NETS_JSON__'); } catch(e) { SRC_NETS = []; }
+
+let NAMES_FOR_BYTES = ['STARLINK_BUS','STARLINK_COR']; // fallback iniziale
+const lastBytes = new Map();  // name -> {rx,tx,t}
+const plots     = new Map();  // name -> MiniPlot
+const haveCard  = new Set();  // card già create
+let initialized = false;
+
+function nice(n){ if(n==='STARLINK_BUS')return'STARLINK RICERCA'; if(n==='STARLINK_COR')return'STARLINK NAVE'; if(n==='BUSINESS_KU')return'KU RICERCA'; if(n==='CORPORATE_KU')return'KU NAVE'; return n; }
+
+// ---- Gauge (data usage) via SVG: robust scaling with viewBox ----
+function renderGaugeSVG(container, used, cap){
+  const pct = cap>0? Math.max(0, Math.min(1, used/cap)): 0;
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class','gauge-svg');
+  // Extra vertical space below for labels
+  svg.setAttribute('viewBox','0 0 200 160');
+  svg.setAttribute('preserveAspectRatio','xMidYMid meet');
+  const cx=100, cy=100, r=90, th=18;
+  // helper to arc path
+  function arcPath(frac){
+    const f = Math.max(0, Math.min(1, frac));
+    const a0 = Math.PI;               // start at 180° (left)
+    const a1 = Math.PI*(1 - f);       // move clockwise towards 0°
+    const large = f > 0.5 ? 1 : 0;    // > 180°? never for f<=1 (but keep for continuity)
+    const x0 = cx + r*Math.cos(a0), y0 = cy + r*Math.sin(a0);
+    const x1 = cx + r*Math.cos(a1), y1 = cy + r*Math.sin(a1);
+    // sweep=1 (clockwise)
+    return `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1}`;
+  }
+  // base ring (remaining scale) — full semicircle path
+  // Define full arc once and reuse it (also as text path)
+  const fullD = arcPath(1);
+  const defs = document.createElementNS(svgNS,'defs');
+  const id = 'gpath_'+Math.random().toString(36).slice(2,8);
+  const defPath = document.createElementNS(svgNS,'path');
+  defPath.setAttribute('id', id);
+  defPath.setAttribute('d', fullD);
+  defPath.setAttribute('pathLength','100');
+  defs.appendChild(defPath);
+  svg.appendChild(defs);
+  const base = document.createElementNS(svgNS,'path');
+  base.setAttribute('d', fullD);
+  base.setAttribute('fill','none'); base.setAttribute('stroke','#2fb344'); base.setAttribute('stroke-width',th);
+  base.setAttribute('stroke-linecap','round');
+  base.setAttribute('pathLength','100');
+  svg.appendChild(base);
+  // used arc
+  const usedPath = document.createElementNS(svgNS,'path');
+  usedPath.setAttribute('d', fullD);
+  usedPath.setAttribute('fill','none'); usedPath.setAttribute('stroke','#e03131'); usedPath.setAttribute('stroke-width',th);
+  usedPath.setAttribute('stroke-linecap','round');
+  usedPath.setAttribute('pathLength','100');
+  usedPath.setAttribute('stroke-dasharray', `${(pct*100).toFixed(3)} 100`);
+  svg.appendChild(usedPath);
+  // needle (center -> arc, account for SVG y increasing downward)
+  const ang = Math.PI*(1-pct); // 0..1 maps π..0 (clockwise)
+  const tipX = cx + (r - th*0.1) * Math.cos(ang);
+  const tipY = cy - (r - th*0.1) * Math.sin(ang);
+  const baseLen = 18; // distance from center to base center
+  const bw = 6;       // base half width
+  const bx = cx - baseLen * Math.cos(ang);
+  const by = cy + baseLen * Math.sin(ang);
+  const px = bw * Math.cos(ang + Math.PI/2);
+  const py = -bw * Math.sin(ang + Math.PI/2);
+  const p1x = bx - px, p1y = by - py;
+  const p2x = bx + px, p2y = by + py;
+  const needle = document.createElementNS(svgNS,'polygon');
+  needle.setAttribute('points', `${p1x},${p1y} ${p2x},${p2y} ${tipX},${tipY}`);
+  needle.setAttribute('fill','#2b6cff');
+  svg.appendChild(needle);
+  // labels helpers
+  function text(x,y,txt,cls,f){ const t=document.createElementNS(svgNS,'text'); t.setAttribute('x',x); t.setAttribute('y',y); t.setAttribute('text-anchor','middle'); t.setAttribute('fill',cls||'#cfd6e6'); t.style.font=f||'12px system-ui,sans-serif'; t.textContent=txt; return t; }
+  // Consumed label along the red arc (skip if too small)
+  if(pct>0.01){
+    const t = document.createElementNS(svgNS,'text');
+    t.setAttribute('fill','#e6f6ff'); t.style.font='600 12px system-ui,sans-serif';
+    t.setAttribute('text-anchor','middle');
+    t.setAttribute('paint-order','stroke'); t.style.stroke='#0b1220'; t.style.strokeWidth='3px'; t.style.strokeLinejoin='round';
+    const tp = document.createElementNS(svgNS,'textPath');
+    tp.setAttribute('href', '#'+id);
+    // Center of the red segment along the path
+    tp.setAttribute('startOffset', (pct*50).toFixed(2)+'%');
+    tp.setAttribute('method','align');
+    tp.setAttribute('side','left');
+    tp.setAttribute('dominant-baseline','central');
+    tp.setAttribute('dy','-6'); // slightly above the arc for readability
+    tp.textContent = `${used.toFixed(2)} GB`;
+    t.appendChild(tp); svg.appendChild(t);
+  }
+  // Remaining label now rendered as HTML below the gauge (see card innerHTML)
+  // numeric cap labels removed to avoid debug text on gauges
+  // optional debug
+  try{ const p=new URLSearchParams(location.search); if(p.get('gdebug')==='1'){ const dbg=text(20,12,`vw:200 vh:120`,'#9fb3c8','10px ui-monospace,monospace'); dbg.setAttribute('text-anchor','start'); svg.appendChild(dbg);} }catch(_){ }
+  container.innerHTML=''; container.appendChild(svg);
+}
+
+async function loadUsageGauges(){
+  try{
+    const [dj, cfgR] = await Promise.all([
+  fetch('/data.json',{cache:'no-store'}).then(r=>r.json()).catch(()=>({labels:[],values:[],total:0})),
+      fetch('/cgi-bin/traffic_config.sh',{cache:'no-store'}).then(r=>r.json()).catch(()=>({subnets:[],limits:{},current_month:''}))
+    ]);
+    const mapUsage=new Map();
+    try{ console.debug('data_usage json', dj); }catch(_){ }
+    try{ console.debug('traffic config', cfgR); }catch(_){ }
+    (dj.labels||[]).forEach((lab,i)=>{ const v=Number((dj.values||[])[i])||0; mapUsage.set(lab, v); });
+    const limits = cfgR.limits||{};
+    const grid=document.getElementById('usageGrid'); if(!grid) return;
+    grid.innerHTML='';
+    const isMgmt = (c)=>{ try{ if(typeof isMgmtSubnet==='function') return isMgmtSubnet(c); }catch(_){} return /^10\.255\./.test(String(c)) || /^10\.10\./.test(String(c)); };
+    const niceCap = (u)=>{ const v=Math.max(0, Number(u)||0); const steps=[10,20,50,100,200,500,800,1000,2000,5000,10000]; for(const s of steps){ if(v<=s*0.8) return s; } return Math.ceil(v/1000)*1000; };
+    // Union: bundled subnets + any with used>0
+    const union = new Set([...Object.keys(limits||{}), ...(dj.labels||[])]);
+    const list = Array.from(union)
+      .filter(k=>!EXCLUDE_NETS.has(k) && !isMgmt(k) && (Number(mapUsage.get(k)||0) > 0))
+      .sort();
+    try{
+      // Show total monthly usage (GB) next to header
+      const tEl = document.getElementById('usageTotal');
+      if(tEl){ const tot = Number(dj.total)||0; tEl.textContent = tot.toFixed(2) + ' GB'; }
+  const m=document.getElementById('usageMonth');
+      if(m){
+        // If server provides current_month as YYYY-MM or YYYY-MM-DD, prefer it but format to Italian month name
+  const monthsEn = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        let setMonth = '';
+        if(cfgR.current_month){
+          // try parse YYYY-MM or YYYY-MM-DD
+          const match = String(cfgR.current_month).match(/^(\d{4})-(\d{2})/);
+          if(match){ const mm = Number(match[2]) - 1; if(mm>=0 && mm<12) setMonth = monthsEn[mm]; }
+        }
+  if(!setMonth){ const d=new Date(); setMonth = monthsEn[d.getMonth()]; }
+        m.textContent = setMonth;
+      }
+    }catch(_){ }
+    // build a best-effort mapping cidr -> friendly name, updated later too
+    const nameMap = getSubnetFriendlyNamesCache();
+  list.forEach(sub=>{
+      const used = Number(mapUsage.get(sub)||0);
+      let cap = Number(limits[sub]||0); if(!(cap>0)) cap = niceCap(used);
+      const remaining = Math.max(0, cap - used);
+      try{ console.debug('gauge', {sub, used, cap, remaining, percent: cap>0? (used/cap*100): 0}); }catch(_){ }
+      const el=document.createElement('div'); el.className='card';
+  const label = (nameMap.get && nameMap.get(sub)) ? `<span class="sub" style="color:#9fb3c8;margin-left:6px">${nameMap.get(sub)}</span>` : '';
+      el.innerHTML = `<div class="row"><b>${sub}</b>${label}</div><div class="gBox"></div><div class="gRemaining">Remaining: ${remaining.toFixed(2)} GB</div><div class="sub mono" style="margin-top:10px">used: ${used.toFixed(2)} GB</div><div class="sub mono">remaining: ${remaining.toFixed(2)} GB</div>`;
+      grid.appendChild(el);
+      renderGaugeSVG(el.querySelector('.gBox'), used, cap);
+    });
+  // in case names become available later, refresh labels once after initial render
+  refreshGaugeLabelsFromCache();
+  }catch(e){ console.warn('loadUsageGauges error', e); }
+}
+
+// ---- Mini grafico canvas ----
+function MiniPlot(canvas){
+  const ctx=canvas.getContext('2d');
+  const dn=[], up=[], labels=[];
+  const maxPts=120; // ~4 minuti a 2s
+
+  function push(label, d,u){
+    labels.push(label); dn.push(d); up.push(u);
+    if(labels.length>maxPts){ labels.shift(); dn.shift(); up.shift(); }
+    draw();
+  }
+  function draw(){
+    const w=canvas.clientWidth|0, h=canvas.clientHeight|0;
+    if(canvas.width!==w) canvas.width=w;
+    if(canvas.height!==h) canvas.height=h;
+    const padL=40,padR=8,padT=10,padB=18;
+    const x0=padL,y0=h-padB,x1=w-padR,y1=padT;
+    ctx.clearRect(0,0,w,h); ctx.fillStyle='#0f1627'; ctx.fillRect(0,0,w,h);
+
+    const all=dn.concat(up).filter(v=>isFinite(v)&&v>=0);
+    let max = Math.max(0.1, ...all);
+    const steps=[0.5,1,2,5,10,20,50,100,200,500,1000,2000,5000,10000];
+    const step=steps.find(s=>max<=s)||Math.ceil(max/1000)*1000;
+    const ymax=Math.max(step, Math.ceil(max/step)*step);
+
+    // grid
+    ctx.strokeStyle='#22314e'; ctx.lineWidth=1; ctx.beginPath();
+    const g=4; for(let i=0;i<=g;i++){ const y=y0-(i/g)*(y0-y1); ctx.moveTo(x0,y); ctx.lineTo(x1,y); } ctx.stroke();
+    // axes
+    ctx.strokeStyle='#2d3d60'; ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y0); ctx.moveTo(x0,y0); ctx.lineTo(x0,y1); ctx.stroke();
+    // y labels
+    ctx.fillStyle='#9fb3c8'; ctx.font='11px system-ui,sans-serif';
+    for(let i=0;i<=g;i++){ const raw=ymax*i/g; const lbl=raw<1?raw.toFixed(1):raw.toFixed(0); const y=y0-(i/g)*(y0-y1); ctx.fillText(lbl+' Mb/s', 4, y-2); }
+
+    const N=labels.length||1, xStep=(x1-x0)/Math.max(1,N-1), yScale=(y0-y1)/ymax;
+    function line(arr,col){ ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath();
+      for(let i=0;i<N;i++){ const v=Math.max(0,Math.min(ymax,(arr[i]||0))); const x=x0+i*xStep; const y=y0-v*yScale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
+      ctx.stroke();
+    }
+    line(dn,'#61a6ff'); line(up,'#7bd88f'); // ↓ blu, ↑ verde
+  }
+  return { push };
+}
+
+// ---- Card: create-once, poi update ----
+function ensureCard(i){
+  const id=i.name;
+  if(haveCard.has(id)) { updateCardStatic(i); return; }
+  const lab=nice(id);
+  const html = `<div class="card" id="c_${id}">
+    <div class="row">
+      <b>${lab}</b>
+      <span class="sub"><span class="dot ${i.status==='online'?'ok':'bad'}" id="dot_${id}"></span><span id="st_${id}">${i.status}</span></span>
+    </div>
+    <div class="sub" id="info_${id}">Online: ${i.online_for||'—'} &nbsp; Uptime: ${i.uptime||'—'} &nbsp; Tracking: ${i.tracking||'—'}</div>
+    <div class="rate mono" id="r_${id}">↓ 0.00 Mb/s  ↑ 0.00 Mb/s</div>
+    <canvas id="ch_${id}"></canvas>
+  </div>`;
+  const wrap = document.getElementById('cards');
+  const tmp = document.createElement('div'); tmp.innerHTML = html;
+  wrap.appendChild(tmp.firstElementChild);
+  const c = document.getElementById('ch_'+id);
+  plots.set(id, MiniPlot(c));      // <-- crea una volta sola
+  haveCard.add(id);
+}
+
+function updateCardStatic(i){
+  // Stato/colore/uptime/tracking senza ri-creare la card
+  const id=i.name;
+  const card = document.getElementById('c_'+id);
+  const dot = document.getElementById('dot_'+id);
+  const st  = document.getElementById('st_'+id);
+  const info= document.getElementById('info_'+id);
+  if(card){ card.classList.toggle('offline', i.status!=='online'); }
+  if(dot){ dot.classList.toggle('ok', i.status==='online'); dot.classList.toggle('bad', i.status!=='online'); }
+  if(st){ st.textContent = i.status||'—'; }
+  if(info){ info.textContent = `Online: ${i.online_for||'—'} \u00A0 Uptime: ${i.uptime||'—'} \u00A0 Tracking: ${i.tracking||'—'}`; }
+}
+
+async function loadStatus(){
+  try{
+    const r = await fetch('/cgi-bin/mwan3_json.sh',{cache:'no-store'});
+    const js = await r.json();
+
+    const ifs = (js.interfaces||[]);
+    const all = ifs.map(x=>x.name).filter(Boolean);
+    const onl = ifs.filter(x=>x.status==='online').map(x=>x.name);
+    NAMES_FOR_BYTES = (onl.length? onl : all).length ? (onl.length? onl : all) : ['STARLINK_BUS','STARLINK_COR'];
+
+    // prima creiamo eventuali card mancanti, poi aggiorniamo testi
+    if(!initialized){
+      document.getElementById('cards').innerHTML = '';  // clean una volta
+      initialized = true;
+    }
+    ifs.forEach(ensureCard);
+    ifs.forEach(updateCardStatic);
+
+    // riordina le card: prima online poi offline (senza ricreare i canvas)
+    try{
+      const wrap = document.getElementById('cards');
+      const sorted = [...ifs].sort((a,b)=>{
+        const sa = a.status==='online' ? 0 : 1;
+        const sb = b.status==='online' ? 0 : 1;
+        if(sa!==sb) return sa-sb;
+        // fallback: ordina alfabeticamente per etichetta leggibile
+        const na = (a.name||'').toString();
+        const nb = (b.name||'').toString();
+        return na.localeCompare(nb);
+      });
+      const frag = document.createDocumentFragment();
+      sorted.forEach(i=>{ const el=document.getElementById('c_'+i.name); if(el) frag.appendChild(el); });
+      wrap.appendChild(frag);
+    }catch(e){}
+
+    // aggiorna etichette delle policies con WAN e percentuali
+    try{
+      const pol = js.policies_v4||{};
+      POLICY_WANS && POLICY_WANS.clear && POLICY_WANS.clear();
+      for(const k of Object.keys(pol)){
+        const arr = Array.isArray(pol[k]) ? pol[k] : [];
+        if(arr.length===1 && (String(arr[0].weight)==='100' || String(arr[0].weight)==='100%')){
+          POLICY_LABELS[k] = arr[0].name || '';
+        }else if(arr.length){
+          POLICY_LABELS[k] = arr.map(x=>`${x.name} (${x.weight}%)`).join(', ');
+        }else{
+          POLICY_LABELS[k] = '';
+        }
+        if(POLICY_WANS){
+          POLICY_WANS.set(k, arr.map(x=>({name:x.name, weight: Number(String(x.weight).replace('%',''))||0})));
+        }
+      }
+    }catch(e){}
+
+    // Auto-hide Fleetone if no FleetOne/FBB-like interface present and auto flag enabled
+    try{
+      const autoF = (UI_CONFIG && UI_CONFIG.auto && UI_CONFIG.auto.fleetone_if_missing)!==false; // default true
+      if(autoF){
+        const names = (ifs||[]).map(x=>String(x.name||'').toUpperCase());
+        const hasFleet = names.some(n=>/FLEET|FBB|FLEETONE/.test(n));
+        const el = document.getElementById('fleetoneCard'); if(el){ el.style.display = hasFleet ? '' : 'none'; }
+      }
+    }catch(_){}
+
+    // sezione policies rimossa; le regole utente ipv4 sono aggiornate via CGI
+  }catch(e){ console.error('loadStatus error', e); }
+}
+
+function setRate(name, d, u){
+  const el=document.getElementById('r_'+name);
+  if(el) el.textContent=`↓ ${d.toFixed(2)} Mb/s  ↑ ${u.toFixed(2)} Mb/s`;
+}
+function num(v){ const n=Number(v); return Number.isFinite(n)?n:NaN; }
+function pickNum(obj, keys){ for(const k of keys){ if(obj&&obj[k]!==undefined){ const n=num(obj[k]); if(Number.isFinite(n)) return n; } } return NaN; }
+
+// non encodare la virgola
+function fetchIfbytes(names){
+  const q = names.join(',');
+  return fetch('/cgi-bin/ifbytes.sh?if='+q,{cache:'no-store'}).then(r=>r.json());
+}
+
+async function sample(){
+  try{
+    // Always update timestamp locally first as a fallback
+    document.getElementById('ts').textContent='Aggiornato: '+new Date().toLocaleTimeString();
+    let js = await fetchIfbytes(NAMES_FOR_BYTES);
+    if(!Array.isArray(js['if']) || js['if'].length===0){
+      if(!(NAMES_FOR_BYTES.length===2 && NAMES_FOR_BYTES.includes('STARLINK_BUS') && NAMES_FOR_BYTES.includes('STARLINK_COR'))){
+        console.warn('ifbytes vuoto, fallback BUS+COR. Payload:', js);
+        js = await fetchIfbytes(['STARLINK_BUS','STARLINK_COR']);
+      }
+    }
+    const rows = Array.isArray(js['if']) ? js['if']
+                : Array.isArray(js.interfaces) ? js.interfaces
+                : Array.isArray(js.data) ? js.data
+                : [];
+
+    const nowWall=Math.floor(Date.now()/1000);
+    const nowTs=(typeof js.ts==='number' && isFinite(js.ts))?js.ts:nowWall;
+    document.getElementById('ts').textContent='Aggiornato: '+new Date(nowTs*1000).toLocaleTimeString();
+
+    if(!rows.length){ console.warn('ifbytes ancora vuoto. Payload:', js); return; }
+
+    const label = new Date(nowTs*1000).toLocaleTimeString();
+    for(const it of rows){
+      const name  = it.name || it.if || it.dev || it.ifname;
+      const rxAbs = pickNum(it, ['rx','rx_bytes','receive','RX','in','bytes_in']);
+      const txAbs = pickNum(it, ['tx','tx_bytes','transmit','TX','out','bytes_out']);
+      if(!name || !Number.isFinite(rxAbs) || !Number.isFinite(txAbs)) continue;
+
+      const prev = lastBytes.get(name);
+      lastBytes.set(name,{rx:rxAbs,tx:txAbs,t:nowTs});
+      const plot=plots.get(name);
+
+      if(!prev){ if(plot) plot.push(label,0,0); continue; }
+
+      let dt=nowTs-prev.t; if(dt<=0) dt=Math.max(1, Math.floor(Date.now()/1000)-prev.t);
+      let drx=rxAbs-prev.rx, dtx=txAbs-prev.tx;
+      if(drx<0||dtx<0) continue;
+      if(drx>1e13||dtx>1e13) continue;
+
+      const dn=(drx*8/dt)/1e6, up=(dtx*8/dt)/1e6;
+      setRate(name, dn, up);
+      if(plot) plot.push(label, dn, up);
+    }
+  }catch(e){
+    console.error('sample error', e);
+    // Ensure timestamp still progresses on errors
+    try{ document.getElementById('ts').textContent='Aggiornato: '+new Date().toLocaleTimeString(); }catch(_){ }
+  }
+}
+
+// ACTIVE label: già valorizzata lato server secondo le LAN configurate
+
+(async function(){
+  await loadStatus();   // crea card una volta (poi solo update testi)
+  await sample();
+  setInterval(sample, 2100);    // 2.1s
+  setInterval(loadStatus, 15000); // aggiorna testi/policies senza ricreare i canvas
+  loadUsageGauges();
+  setInterval(loadUsageGauges, 15000);
+  // Connected Users data loader
+  let connectedData = [];
+  let connectedFiltered = [];
+  let connectedPage = 1;
+  const CONNECTED_PER_PAGE = 4;
+
+  async function loadConnected(){
+    try{
+      const r = await fetch('/cgi-bin/connected_users.sh',{cache:'no-store'});
+      if(!r.ok) throw new Error('failed');
+      const js = await r.json();
+      if(!Array.isArray(js)) { console.warn('connected endpoint returned non-array', js); connectedData = []; }
+      else connectedData = js;
+      // Auto-hide connected users if empty and auto flag enabled
+      try{
+        const autoC = (UI_CONFIG && UI_CONFIG.auto && UI_CONFIG.auto.connected_if_empty)!==false; // default true
+        const el = document.getElementById('connectedCard'); if(el){ el.style.display = (autoC && connectedData.length===0) ? 'none' : ''; }
+      }catch(_){}
+      applyConnectedFilter();
+    }catch(e){ console.warn('loadConnected error', e); connectedData = []; applyConnectedFilter(); }
+    try{ document.getElementById('connectedInfo').textContent = 'Aggiornato: '+new Date().toLocaleTimeString(); }catch(_){ }
+  }
+
+  function applyConnectedFilter(){
+    const q = (document.getElementById('connectedSearch')?.value||'').toLowerCase().trim();
+    if(!q){ connectedFiltered = connectedData.slice(); }
+    else{
+      connectedFiltered = connectedData.filter(row=>{
+        // Prefer server-provided data_mb for searching, fallback to rx_mb/tx_mb
+        const dataField = (row.data_mb!==undefined && row.data_mb!==null) ? String(row.data_mb) : (String(row.rx_mb||'')+' '+String(row.tx_mb||''));
+        return String(row.user||'').toLowerCase().includes(q) || dataField.toLowerCase().includes(q) || String(row.ip||'').includes(q) || String(row.mac||'').toLowerCase().includes(q);
+      });
+    }
+    connectedPage = 1; renderConnected();
+  }
+
+  function renderConnected(){
+    const body=document.getElementById('connectedBody'); if(!body) return;
+    const head=document.getElementById('connectedHead'); if(!head) return;
+    const total = connectedFiltered.length || 0; const totalPages = Math.max(1, Math.ceil(total/CONNECTED_PER_PAGE));
+    if(connectedPage<1) connectedPage=1; if(connectedPage>totalPages) connectedPage=totalPages;
+    const start=(connectedPage-1)*CONNECTED_PER_PAGE; const slice = connectedFiltered.slice(start, start+CONNECTED_PER_PAGE);
+
+    // Decide which optional columns to show based on meaningful values across the filtered set
+    const anyRows = connectedFiltered;
+    const hasUptime = anyRows.some(r=>{ const v=String(r.uptime||'').trim(); return v!=='' && v!=='0' && v!=='00:00:00' && v!=='0:00:00'; });
+    const hasLimT = anyRows.some(r=>{ const v=String(r.lim_t||'').trim(); return v!=='' && v!=='0' && v!=='∞' && v!=='infty'; });
+    const hasData = anyRows.some(r=>{
+      const rx = (r.rx_mb===undefined||r.rx_mb===null)?NaN:parseFloat(String(r.rx_mb).replace(',','.'));
+      const tx = (r.tx_mb===undefined||r.tx_mb===null)?NaN:parseFloat(String(r.tx_mb).replace(',','.'));
+      return Number.isFinite(rx) && Number.isFinite(tx) && (rx+tx)>0;
+    });
+
+    // Build header: USERS, IP, MAC-Address always; then optional columns in order
+    const headers = ['USERS','IP','MAC-Address'];
+    if(hasUptime) headers.push('UPTIME');
+    if(hasLimT) headers.push('LIMIT TIME');
+    if(hasData) headers.push('DATA (MB)');
+
+    head.innerHTML = '<tr>' + headers.map(h=>`<th>${h}</th>`).join('') + '</tr>';
+
+    if(!slice.length){ body.innerHTML = `<tr><td colspan="${Math.max(1,headers.length)}">—</td></tr>`; }
+    else{
+      body.innerHTML = slice.map(r=>{
+        // Compute DATA as rx_mb + tx_mb (MB)
+        const rxN = parseFloat(String(r.rx_mb||'').replace(',','.'));
+        const txN = parseFloat(String(r.tx_mb||'').replace(',','.'));
+        const dataN = (Number.isFinite(rxN)?rxN:0) + (Number.isFinite(txN)?txN:0);
+        const cells = [];
+        // USERS (user field)
+        cells.push(`<td>${escapeHtml(r.user||'')}</td>`);
+        // IP
+        cells.push(`<td>${escapeHtml(r.ip||'')}</td>`);
+        // MAC-Address
+        cells.push(`<td>${escapeHtml(r.mac||'')}</td>`);
+        if(hasUptime) cells.push(`<td>${escapeHtml(r.uptime||'')}</td>`);
+        if(hasLimT) cells.push(`<td>${escapeHtml(r.lim_t||'')}</td>`);
+        if(hasData) cells.push(`<td class="num">${Number.isFinite(dataN)?dataN.toFixed(1):''}</td>`);
+        return `<tr>${cells.join('')}</tr>`;
+      }).join('');
+    }
+    const pageEl = document.getElementById('connectedPage'); if(pageEl) pageEl.textContent = `${connectedPage}/${totalPages}`;
+  }
+
+  function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  // Wire up controls
+  try{
+    document.getElementById('connectedSearch')?.addEventListener('input', ()=>{ applyConnectedFilter(); });
+    document.getElementById('connectedFirst')?.addEventListener('click', ()=>{ connectedPage=1; renderConnected(); });
+    document.getElementById('connectedPrev')?.addEventListener('click', ()=>{ connectedPage=Math.max(1, connectedPage-1); renderConnected(); });
+    document.getElementById('connectedNext')?.addEventListener('click', ()=>{ connectedPage=connectedPage+1; renderConnected(); });
+    document.getElementById('connectedLast')?.addEventListener('click', ()=>{ const total = connectedFiltered.length || 0; connectedPage = Math.max(1, Math.ceil(total/CONNECTED_PER_PAGE)); renderConnected(); });
+  }catch(e){}
+
+  // Start periodic updates (30s)
+  loadConnected(); setInterval(loadConnected, 30000);
+  // Imposta il mese corrente in Italiano nella intestazione Data Usage.
+  // Se il server ha inserito una stringa tipo "2025-09" o ": 2025-09" la convertiamo
+  function setUsageMonthFromServerOrNow(){
+    try{
+  const monthsEn = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const el = document.getElementById('usageMonth');
+      if(!el) return;
+      const txt = String(el.textContent||'').trim();
+      // match YYYY-MM
+      const m = txt.match(/(\d{4})-(\d{2})/);
+      if(m){
+        const mm = parseInt(m[2],10);
+  if(mm>=1 && mm<=12){ el.textContent = monthsEn[mm-1]; return; }
+      }
+      // match just MM number like : 09 or (09)
+      const n = txt.match(/\b(0?[1-9]|1[0-2])\b/);
+  if(n){ const mm = parseInt(n[1],10); if(mm>=1 && mm<=12){ el.textContent = monthsEn[mm-1]; return; } }
+      // fallback: set current month
+  const now = new Date(); el.textContent = monthsEn[now.getMonth()];
+    }catch(e){/* ignore */}
+  }
+  setUsageMonthFromServerOrNow();
+})();
+</script>
+<script>
+// Refresh Active ipv4 user rules every ~2s
+async function updateRules(){
+  try{
+    const r = await fetch('/cgi-bin/ipv4_rules.sh',{cache:'no-store'});
+    const t = await r.text();
+  // derive/update friendly subnet names from current rules
+  deriveSubnetNameFromRules(t||'');
+    // Fallback mapping policy -> WAN if missing
+    try{
+      if(!POLICY_WANS || (typeof POLICY_WANS.size !== 'undefined' && POLICY_WANS.size===0)){
+        const rp = await fetch('/cgi-bin/policies_map.sh',{cache:'no-store'});
+        if(rp.ok){
+          const pm = await rp.json();
+          if(pm && Array.isArray(pm.policies)){
+            if(POLICY_WANS.clear) POLICY_WANS.clear();
+            pm.policies.forEach(p=>{
+              const arr = Array.isArray(p.members)?p.members:[];
+              POLICY_WANS.set(p.name, arr.map(x=>({name:x.name, weight:Number(x.weight)})));
+            });
+          }
+        }
+      }
+    }catch(e){ console.warn('policies_map fallback failed', e); }
+    // aggiorna dynamic source filter dalle regole correnti
+    updateSourceFilterFromRules(t||'');
+    // update rules table
+    renderRulesTable(t||'');
+    // update flow diagram too
+    updateFlows(t||'');
+  }catch(e){ console.error('updateRules error', e); }
+}
+
+updateRules();
+setInterval(updateRules, 2100);
+
+// ---- Flow diagram (sources -> WAN), colored by policy ----
+const POLICY_ORDER = ['CREW_M','BUS_FAILOVER','CORP_FAILOVER','FAILOVER','BALANCED'];
+const POLICY_COLORS = {
+  'CREW_M':'#ffb020',
+  'BUS_FAILOVER':'#61a6ff',
+  'CORP_FAILOVER':'#20e3b2',
+  'FAILOVER':'#ff6b6b',
+  'BALANCED':'#c792ea'
+};
+const POLICY_LABELS = Object.create(null);
+const POLICY_WANS = new Map();
+let SOURCE_FILTER = new Set(Array.isArray(SRC_NETS)?SRC_NETS:[]);
+const EXCLUDE_NETS = new Set(__EXCLUDE_NETS_JSON__);
+function isMgmtSubnet(c){
+  const s = String(c||'');
+  // Match any CIDR under 10.255.0.0/16 or 10.10.0.0/16, any mask length
+  return (/^10\.255\./.test(s) || /^10\.10\./.test(s)) && /\/\d+$/.test(s);
+}
+
+function parseSizeBytes(tok){
+  if(!tok) return 0; const m=String(tok).match(/^(\d+(?:\.\d+)?)([KkMmGg])?$/); if(!m){ const n=Number(tok); return Number.isFinite(n)?n:0; }
+  let v=parseFloat(m[1]); const u=m[2]?.toUpperCase(); if(u==='K') v*=1024; else if(u==='M') v*=1024*1024; else if(u==='G') v*=1024*1024*1024; return v;
+}
+
+function parseFlows(text){
+  const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  // First collect candidate items; then drop UNKNOWN for any src that also has known WAN
+  const items = [];
+  for(const ln of lines){
+    if(!/ - \w+ /.test(ln)) continue;
+    const mPol = ln.match(/-\s+([A-Z_]+)/);
+    if(!mPol) continue; const policy=mPol[1];
+    const tokens=ln.split(/\s+/);
+    let bytes = 0; if(tokens.length>1) bytes=parseSizeBytes(tokens[1]);
+    const cidrs = [...ln.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\/\d+\b/g)].map(m=>m[0]);
+    const src = cidrs.find(c=>c!=='0.0.0.0/0') || 'other';
+    if(isMgmtSubnet(src) || EXCLUDE_NETS.has(src)) continue;
+    if(SOURCE_FILTER.size && !SOURCE_FILTER.has(src)) continue;
+    const wans = POLICY_WANS.get(policy) || [];
+    const sumW = wans.reduce((a,b)=>a+(Number(String(b.weight).replace('%',''))||0),0);
+    if(!wans.length || sumW<=0){
+      items.push({src, pol:policy, wan:'UNKNOWN', bytes});
+      continue;
+    }
+    for(const w of wans){
+      const wnum = Number(String(w.weight).replace('%',''))||0;
+      const share = bytes * (wnum/sumW);
+      items.push({src, pol:policy, wan:String(w.name), bytes:share});
+    }
+  }
+  const hasKnown = new Set(items.filter(it=>it.wan!=='UNKNOWN').map(it=>it.src));
+  const flows = new Map(); // key `${src}||${pol}||${wan}` -> bytes
+  for(const it of items){
+    if(hasKnown.has(it.src) && it.wan==='UNKNOWN') continue; // drop UNKNOWN if a known WAN exists for same src
+    const key = `${it.src}||${it.pol}||${it.wan}`;
+    flows.set(key, (flows.get(key)||0)+it.bytes);
+  }
+  return flows; // Map of flows
+}
+
+function formatBytesCompact(bytes){
+  if(bytes<=0||!isFinite(bytes)) return '0 B';
+  const KB=1024, MB=KB*1024, GB=MB*1024;
+  if(bytes>=GB) return (bytes/GB).toFixed(bytes/GB>=10?0:1)+' GB';
+  if(bytes>=MB) return (bytes/MB).toFixed(bytes/MB>=10?0:1)+' MB';
+  if(bytes>=KB) return (bytes/KB).toFixed(bytes/KB>=10?0:1)+' KB';
+  return bytes.toFixed(0)+' B';
+}
+
+function updateSourceFilterFromRules(text){
+  try{
+    const cidrs = [...text.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\/\d+\b/g)].map(m=>m[0]).filter(c=>c!=='0.0.0.0/0' && !isMgmtSubnet(c) && !EXCLUDE_NETS.has(c));
+    if(cidrs.length){ SOURCE_FILTER = new Set([...(SOURCE_FILTER||[]), ...cidrs]); }
+  }catch(e){ console.error('updateSourceFilterFromRules error', e); }
+}
+
+function renderRulesTable(text){
+  try{
+    const tbody=document.getElementById('rulesBody'); if(!tbody) return;
+    const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+    // Ricostruisci le info di flusso per allineare l'ordinamento alla vista grafica
+    const fMap = parseFlows(text);
+    const flowEntries = [...fMap.entries()].map(([k,v])=>{ const [src,pol,wan]=k.split('||'); return {src,pol,wan,bytes:v}; });
+    const wans = [...new Set(flowEntries.map(f=>f.wan))].sort();
+    const wanIndex = new Map(wans.map((w,i)=>[w,i]));
+    const centroid = new Map();
+    for(const f of flowEntries){
+      const idx = wanIndex.get(f.wan)||0; const prev=centroid.get(f.src)||{s:0,w:0};
+      prev.s += idx*f.bytes; prev.w += f.bytes; centroid.set(f.src, prev);
+    }
+    const centroidVal = src=>{ const o=centroid.get(src); return o && o.w>0 ? (o.s/o.w) : 0; };
+    const cand=[];
+    for(const ln of lines){
+      if(!/ - \w+ /.test(ln)) continue;
+      const mPol = ln.match(/-\s+([A-Z_]+)/); if(!mPol) continue; const policy=mPol[1];
+      const tokens=ln.split(/\s+/); if(tokens.length<2) continue; const bytes=parseSizeBytes(tokens[1]);
+      const cidrs=[...ln.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\/\d+\b/g)].map(m=>m[0]);
+      const src=cidrs.find(c=>c!=='0.0.0.0/0')||''; if(isMgmtSubnet(src) || EXCLUDE_NETS.has(src)) continue; if(SOURCE_FILTER.size && !SOURCE_FILTER.has(src)) continue;
+      // Map policy -> WAN label(s) using POLICY_WANS
+      let wan='—'; let wanKey='';
+      try{
+        const arr = (POLICY_WANS && POLICY_WANS.get) ? (POLICY_WANS.get(policy) || []) : [];
+        const names = arr.map(x=>nice(x.name||'')||x.name);
+        if(arr.length===1){ const w=arr[0]; wanKey = names[0]||''; wan = (String(w.weight)==='100'||String(w.weight)==='100%') ? (names[0]||'') : `${names[0]||''} (${w.weight}%)`; }
+        else if(arr.length>1){ wanKey = names.slice().sort()[0]||''; wan = arr.map((x,i)=>`${names[i]} (${x.weight}%)`).join(', '); }
+      }catch(e){ wan='—'; }
+      cand.push({src,bytes,wan,wanKey,cent: centroidVal(src)});
+    }
+    if(!cand.length){ tbody.innerHTML='<tr><td colspan="3">—</td></tr>'; return; }
+
+    // Deduplicate by src: prefer rows with known WAN; if multiple known, keep the one with max bytes; otherwise keep the largest UNKNOWN
+    const bestBySrc = new Map();
+    for(const r of cand){
+      const prev = bestBySrc.get(r.src);
+      const rKnown = !!r.wanKey;
+      if(!prev){ bestBySrc.set(r.src, r); continue; }
+      const pKnown = !!prev.wanKey;
+      if(rKnown && !pKnown){ bestBySrc.set(r.src, r); continue; }
+      if(rKnown === pKnown && r.bytes > prev.bytes){ bestBySrc.set(r.src, r); continue; }
+      // else keep prev
+    }
+    const rows = [...bestBySrc.values()];
+    // Ordina coerentemente con il grafico: prima per centroide (sorgenti ordinati per WAN di destinazione), poi per wanKey, poi bytes desc
+    rows.sort((a,b)=>{
+      if(a.cent!==b.cent) return a.cent-b.cent; // stesso criterio del grafico (alto->basso)
+      if(a.wanKey!==b.wanKey) return (a.wanKey||'').localeCompare(b.wanKey||'');
+      return b.bytes-a.bytes;
+    });
+    tbody.innerHTML = rows.map(r=>`<tr><td>${r.src}</td><td class=\"num\">${formatBytesCompact(r.bytes)}</td><td>${r.wan}</td></tr>`).join('');
+  }catch(e){ console.error('renderRulesTable error', e); }
+}
+
+// Build and cache a mapping from CIDR -> friendly name using rules and well-known subnets
+const SUBNET_NAME_CACHE = new Map();
+function cleanPolicyName(n){ return String(n||'').replace(/_(M|B)\b/g,'').replace(/_/g,' ').trim(); }
+function deriveSubnetNameFromRules(text){
+  try{
+    const res = new Map();
+    const bySrcBest = new Map(); // cidr -> {name, bytes}
+    const lines = String(text||'').split(/\r?\n/);
+    for(const ln of lines){
+      const cidr = (ln.match(/\b(?:\d{1,3}\.){3}\d{1,3}\/\d+\b/)||[])[0];
+      if(!cidr) continue;
+      const mPol = ln.match(/-\s+([A-Z_]+)/); if(!mPol) continue;
+      const polName = cleanPolicyName(mPol[1]);
+      // try parse bytes token (2nd column like "123 MB")
+      let bytes = 0;
+      const tok = (ln.split(/\s+/)[1]||'');
+      bytes = parseSizeBytes(tok);
+      const prev = bySrcBest.get(cidr);
+      if(!prev || bytes>prev.bytes){ bySrcBest.set(cidr,{name:polName, bytes}); }
+    }
+    // static well-known cidr -> name
+    const staticMap = new Map([
+      ['10.50.0.0/24','OFFICE'],
+      ['10.49.0.0/24','OT'],
+      ['10.48.0.0/24','IT'],
+      ['192.168.0.0/16','CREW']
+    ]);
+    // merge into cache
+    for(const [k,v] of staticMap) res.set(k,v);
+    for(const [k,o] of bySrcBest) res.set(k,o.name);
+    // do not include chilli transient 192.168.182.0/24 unless policy provides name; fallback to CREW
+    if(!res.has('192.168.182.0/24')) res.set('192.168.182.0/24','CREW');
+    // update cache
+    SUBNET_NAME_CACHE.clear(); for(const [k,v] of res) SUBNET_NAME_CACHE.set(k,v);
+    // after updating cache, refresh labels if gauges are already on page
+    refreshGaugeLabelsFromCache();
+  }catch(e){ /* ignore */ }
+}
+function getSubnetFriendlyNamesCache(){ return SUBNET_NAME_CACHE; }
+
+// Refresh the label (friendly name) next to each gauge CIDR if available in cache
+function refreshGaugeLabelsFromCache(){
+  try{
+    const map = getSubnetFriendlyNamesCache();
+    const grid = document.getElementById('usageGrid'); if(!grid) return;
+    const rows = grid.querySelectorAll('.card > .row');
+    rows.forEach(row=>{
+      const b = row.querySelector('b'); if(!b) return; const cidr = (b.textContent||'').trim();
+      const name = map && map.get && map.get(cidr);
+      let span = row.querySelector('span.sub');
+      if(name){
+        if(!span){ span = document.createElement('span'); span.className='sub'; span.style.color='#9fb3c8'; row.appendChild(document.createTextNode(' ')); row.appendChild(span); }
+        span.textContent = name;
+      }
+    });
+  }catch(e){ /* ignore */ }
+}
+
+function drawLegend(policies){
+  const el=document.getElementById('flowLegend'); if(!el) return;
+  el.innerHTML='';
+  const set=new Set(policies);
+  for(const p of POLICY_ORDER.concat([...set].filter(x=>!POLICY_ORDER.includes(x)))){
+    if(!set.has(p)) continue;
+    const color = POLICY_COLORS[p]||'#9fb3c8';
+    const div=document.createElement('div'); div.className='legend-item';
+    div.innerHTML = `<span class=\"swatch\" style=\"background:${color}\"></span><span>${p}</span>`;
+    el.appendChild(div);
+  }
+}
+
+function drawFlows(flows){
+  const canvas=document.getElementById('flowCanvas'); if(!canvas) return;
+  const ctx=canvas.getContext('2d');
+  const w=canvas.clientWidth|0, h=canvas.clientHeight|0; if(canvas.width!==w) canvas.width=w; if(canvas.height!==h) canvas.height=h;
+  ctx.clearRect(0,0,w,h); ctx.fillStyle='#0f1627'; ctx.fillRect(0,0,w,h);
+  const padL=160, padR=160, padT=20, padB=20; const xL=padL, xR=w-padR; const y0=padT, y1=h-padB;
+
+  // derive node sets
+  const bySrc=new Map(), byWan=new Map();
+  const flowEntries=[...flows.entries()].map(([k,v])=>{ const [src,pol,wan]=k.split('||'); return {src,pol,wan,bytes:v}; });
+  for(const f of flowEntries){ bySrc.set(f.src,(bySrc.get(f.src)||0)+f.bytes); byWan.set(f.wan,(byWan.get(f.wan)||0)+f.bytes); }
+  const wans=[...byWan.keys()].sort();
+  const wanIndex=new Map(wans.map((w,i)=>[w,i]));
+  // Order sources by destination WAN: use weighted average index of WANs per source
+  const sources=[...bySrc.keys()].sort((a,b)=>{
+    function centroid(src){
+      let sum=0, wsum=0; for(const f of flowEntries){ if(f.src===src){ const idx=wanIndex.get(f.wan)||0; sum+=idx*f.bytes; wsum+=f.bytes; } } return wsum>0? (sum/wsum): 0;
+    }
+    const ca=centroid(a), cb=centroid(b);
+    if(ca!==cb) return ca-cb;
+    return a.localeCompare(b);
+  });
+  const srcCount=sources.length||1, wanCount=wans.length||1;
+
+  // positions
+  const srcPos=new Map(), wanPos=new Map();
+  for(let i=0;i<sources.length;i++){ const y=y0+(i+0.5)*(y1-y0)/srcCount; srcPos.set(sources[i], y); }
+  for(let i=0;i<wans.length;i++){ const y=y0+(i+0.5)*(y1-y0)/wanCount; wanPos.set(wans[i], y); }
+
+  // scale thickness
+  const totals=[...flows.values()]; const maxB = Math.max(1, ...totals);
+  const maxThickness = Math.max(2, (y1-y0)/Math.max(srcCount,wanCount)/2);
+  function tFor(b){ return Math.max(1, (b/maxB)*maxThickness); }
+
+  // Precompute label offsets to mitigate overlap of policy labels per source
+  const orderIndex = p=>{ const i=POLICY_ORDER.indexOf(p); return i===-1?999:i; };
+  const offsets = new Map(); // key src||pol -> y offset
+  for(const s of sources){
+    const pols = Array.from(new Set(flowEntries.filter(f=>f.src===s).map(f=>f.pol)))
+      .sort((a,b)=>orderIndex(a)-orderIndex(b));
+    const n=pols.length||1; const step=14;
+    for(let i=0;i<pols.length;i++){
+      const off=(i-(n-1)/2)*step; offsets.set(`${s}||${pols[i]}`, off);
+    }
+  }
+  // Choose a representative flow per (src,pol) to place the policy label (largest bytes)
+  const repFlow = new Map(); // key src||pol -> {src,pol,wan,bytes}
+  for(const f of flowEntries){ const k=`${f.src}||${f.pol}`; const cur=repFlow.get(k); if(!cur||f.bytes>cur.bytes) repFlow.set(k,f); }
+
+  // draw flows
+  ctx.globalAlpha=0.95; ctx.lineCap='round';
+  const presentPolicies=new Set();
+  for(const f of flowEntries){ const {src,pol,wan,bytes}=f; presentPolicies.add(pol); const yA=srcPos.get(src), yB=wanPos.get(wan); if(yA==null||yB==null) continue; const t=tFor(bytes);
+    const color = POLICY_COLORS[pol]||'#7589ff';
+    ctx.lineWidth=t; ctx.strokeStyle=color;
+    ctx.beginPath(); ctx.moveTo(xL, yA);
+    const c1x=xL+(xR-xL)*0.33, c2x=xL+(xR-xL)*0.66;
+    ctx.bezierCurveTo(c1x, yA, c2x, yB, xR, yB); ctx.stroke();
+
+    // bytes label (transparent background with outline)
+    const mx = (xL + 2*c1x + 2*c2x + xR)/6;
+    const my = (yA + 2*yA + 2*yB + yB)/6;
+    const txt = formatBytesCompact(bytes);
+    ctx.font='11px system-ui,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.lineWidth=3; ctx.strokeStyle='rgba(0,0,0,0.6)'; ctx.strokeText(txt, mx, my);
+    ctx.fillStyle='#e6eef7'; ctx.fillText(txt, mx, my);
+
+    // policy label placed on the left side between source label and bytes label
+    // only on representative flow for each (src,pol), with small vertical offset per source to avoid overlaps
+    const keySP = `${src}||${pol}`;
+    if(repFlow.get(keySP) === f){
+      const tpar=0.32;
+      let px = (1-tpar)**3*xL + 3*(1-tpar)**2*tpar*c1x + 3*(1-tpar)*tpar**2*c2x + tpar**3*xR;
+      let py = (1-tpar)**3*yA + 3*(1-tpar)**2*tpar*yA + 3*(1-tpar)*tpar**2*yB + tpar**3*yB;
+      py += offsets.get(keySP)||0;
+      const ptxt = pol;
+      ctx.lineWidth=3; ctx.strokeStyle='rgba(0,0,0,0.6)'; ctx.strokeText(ptxt, px, py-10);
+      ctx.fillStyle='#e6eef7'; ctx.fillText(ptxt, px, py-10);
+    }
+  }
+
+  drawLegend(presentPolicies);
+
+  // labels
+  ctx.globalAlpha=1; ctx.fillStyle='#e6eef7'; ctx.font='12px system-ui,sans-serif'; ctx.textAlign='right';
+  for(const s of sources){ ctx.fillText(s, xL-10, (srcPos.get(s)||0)+4); }
+  ctx.textAlign='left';
+  for(const w of wans){ ctx.fillText(nice(w), xR+24, (wanPos.get(w)||0)+4); }
+}
+
+function updateFlows(text){
+  try{
+    const flows=parseFlows(text);
+    drawFlows(flows);
+  }catch(e){ console.error('updateFlows error', e); }
+}
+
+window.addEventListener('resize', ()=>updateRules());
+</script>
+
+<script>
+// Fleetone export: populate month select and export CSV from /data_usage/call_log.json
+function monthKeyFromDate(d){ const y=d.getFullYear(); const m=(d.getMonth()+1).toString().padStart(2,'0'); return `${y}-${m}`; }
+
+function monthLabelFromKey(k){ try{ const [y,m]=k.split('-').map(Number); const months=['January','February','March','April','May','June','July','August','September','October','November','December']; return `${months[m-1]||('M'+m)} ${y}` }catch(e){return k} }
+
+async function populateFleetoneMonthSelect(){
+  const sel = document.getElementById('fleetoneMonthSelect'); if(!sel) return;
+  // Try fetch call_log.json to detect months present
+  try{
+  const j = await fetch('/call_log.json',{cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    const months = new Set();
+    if(Array.isArray(j)){
+      for(const it of j){
+        // collect a list of candidate date values from common fields
+        const candidates = [];
+        // textual fields
+        candidates.push(it['start time'], it['stop time'], it['start'], it['stop'], it.start_time, it.stop_time, it.start_epoch, it.end_epoch, it.startEpoch, it.endEpoch);
+        // also look for nested or alternate naming
+        if(it.meta && typeof it.meta === 'object'){
+          candidates.push(it.meta.start, it.meta.end, it.meta.time);
+        }
+        // evaluate candidates until we find a parseable epoch
+        let found = false;
+        for(const c of candidates){
+          if(c===undefined||c===null) continue;
+          const t = toEpoch(c);
+          if(!isFinite(t)) continue;
+          const d = new Date(t*1000);
+          months.add(monthKeyFromDate(d));
+          found = true; break;
+        }
+        // if none found, try to infer from numeric duration or other heuristics (skip)
+      }
+    }
+    // Always include current month
+    months.add(monthKeyFromDate(new Date()));
+    // sort descending (newest first)
+    const arranged = [...months].sort((a,b)=> b.localeCompare(a));
+    sel.innerHTML = arranged.map(k=>`<option value="${k}">${monthLabelFromKey(k)}</option>`).join('');
+  }catch(e){ console.warn('populateFleetoneMonthSelect error',e); }
+}
+
+// Robust parser that accepts epoch numbers, ISO strings, and formats like "09:24:17 17 Sep 2025" or "17 Sep 2025 09:24:17"
+function toEpoch(v){ if(v===undefined||v===null) return NaN; const s=String(v).trim(); if(/^[0-9]+$/.test(s)){ // integer seconds or milliseconds
+    const n=Number(s); if(n>1e12) return Math.floor(n/1000); if(n>1e9) return Math.floor(n); return n; }
+  const iso = Date.parse(s); if(!isNaN(iso)) return Math.floor(iso/1000);
+  // Match HH:MM:SS DD Mon YYYY or DD Mon YYYY HH:MM:SS
+  const re = /(?:(\d{1,2}:\d{2}:\d{2})\s+)?(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})(?:\s+(\d{1,2}:\d{2}:\d{2}))?/i;
+  const m = s.match(re);
+  if(m){ const t1 = m[1]||m[5]||'00:00:00'; const day=Number(m[2]); const monStr=m[3]; const year=Number(m[4]); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const month=months.findIndex(x=>x.toLowerCase()===monStr.toLowerCase()); if(month>=0){ const parts=t1.split(':').map(Number); const dt=new Date(year, month, day, parts[0]||0, parts[1]||0, parts[2]||0); return Math.floor(dt.getTime()/1000); } }
+  return NaN;
+}
+
+async function fetchCallLog(){ try{ const r = await fetch('/call_log.json',{cache:'no-store'}); if(!r.ok) return null; return await r.json(); }catch(e){ console.warn('fetchCallLog',e); return null; } }
+
+function csvEscape(v){ if(v===null||v===undefined) return ''; const s=String(v); if(s.includes(',')||s.includes('\n')||s.includes('"')) return '"'+s.replace(/"/g,'""')+'"'; return s; }
+
+async function fleetoneExportForSelectedMonth(){
+  const sel = document.getElementById('fleetoneMonthSelect'); const st = document.getElementById('fleetoneStatus'); if(!sel||!st) return;
+  const month = sel.value; if(!month){ st.textContent='Select month'; return; }
+  st.textContent='Preparing...';
+  const data = await fetchCallLog(); if(!Array.isArray(data)){ st.textContent='No call_log.json found'; return; }
+  const rows = [];
+  // header: minimal fields as requested
+  rows.push(['start_time','end_time','direction','caller','callee','duration','type'].map(csvEscape));
+  for(const rec of data){
+    const rawStart = rec['start time']||rec.start||rec.start_time||'';
+    const rawEnd = rec['stop time']||rec.stop||rec.stop_time||'';
+    const sEpoch = toEpoch(rawStart);
+    if(!isFinite(sEpoch)) continue;
+    const d = new Date(sEpoch*1000);
+    const recMonth = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    if(recMonth !== month) continue;
+    const dirRaw = String(rec.direction||rec.dir||'').toLowerCase();
+    const direction = dirRaw.charAt(0).toUpperCase() + dirRaw.slice(1); // Incoming / Outgoing
+
+    // Determine connected (external) and our ship number
+    const connected = rec['connected number']||rec['connected_number']||rec.connected_number||rec['caller']||rec.caller||'';
+    const ourNum = rec['our number']||rec['our_number']||rec.our_number||rec['callee']||rec.callee||'';
+
+    function normalizePhone(x){ if(!x && x!==0) return ''; let s=String(x).trim(); // strip leading + or 00 international prefix
+      if(s.startsWith('+')) s = s.slice(1);
+      else if(s.startsWith('00')) s = s.slice(2);
+      return s;
+    }
+
+    let caller = '';
+    let callee = '';
+    if(dirRaw === 'incoming'){
+      // external called us: caller = external, callee = our number
+      caller = normalizePhone(connected || '');
+      callee = normalizePhone(ourNum || '');
+    }else if(dirRaw === 'outgoing'){
+      // we called external: caller = our number (if present), callee = external
+      caller = normalizePhone(ourNum || '');
+      callee = normalizePhone(connected || '');
+    }else{
+      // unknown direction: prefer explicit fields if present
+      caller = normalizePhone(rec['caller']||rec.caller||connected||'');
+      callee = normalizePhone(rec['callee']||rec.callee||ourNum||'');
+    }
+
+    rows.push([rawStart, rawEnd, direction, caller, callee, String(rec.duration||''), rec.type||''].map(csvEscape));
+  }
+  if(rows.length<=1){ st.textContent='No records for selected month'; return; }
+  const csvText = rows.map(r=>r.join(',')).join('\n');
+  const blob = new Blob([csvText], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `fleetone_calls_${month}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  st.textContent = `Downloaded ${rows.length-1} rows`;
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  populateFleetoneMonthSelect();
+  const btn = document.getElementById('fleetoneDownloadBtn'); if(btn) btn.addEventListener('click', fleetoneExportForSelectedMonth);
+  // Re-apply visibility once DOM is ready
+  applyVisibility();
+});
+</script>

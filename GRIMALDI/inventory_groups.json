@@ -1,0 +1,12 @@
+{
+  "GRIMALDI_GROUP": {
+    "name": "GRIMALDI Group",
+    "description": "Grimaldi fleet inventories including Atlantic and main fleet",
+    "inventories": [
+      "grimaldi_atlantic_to_deploy.csv",
+      "grimaldi_list_hostname.csv"
+    ],
+    "created_at": "2025-10-09T00:00:00Z",
+    "updated_at": "2025-10-14T16:42:53.577759Z"
+  }
+}
